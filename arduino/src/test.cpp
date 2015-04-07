@@ -6,7 +6,90 @@
 #include "MPU9150.hpp"
 #include "HMC5883L.hpp"
 
-PrintLogger print_logger(Serial);
+struct UAVData3f
+{
+  float x;
+  float y;
+  float z;
+};
+
+struct UAVSensorData
+{
+  UAVData3f gyro;
+  UAVData3f accel;
+  UAVData3f mag;
+};
+
+
+
+
+class Remote
+{
+public:
+  virtual bool sendData(const uint8_t* buf, size_t count)
+  {
+    return true;
+  }
+  bool sendUAVSensorData(const UAVSensorData& data)
+  {
+    return sendData((const uint8_t *) &data, sizeof(data));
+  }
+};
+
+
+
+
+
+class PrintRemote : public Remote
+{
+private:
+  Print& print_;
+
+public:
+  PrintRemote(Print& print) : print_(print)
+  {
+  }
+
+  bool sendNibble(const uint8_t b)
+  {
+    if (b < 10)
+      print_.print((char)('0' + b));
+    else
+      print_.print((char)('A' + (b - 10)));
+    return true;
+  }
+
+  bool sendByte(const uint8_t b)
+  {
+    if (!sendNibble((b >> 4) & 0x0F))
+      return false;
+    if (!sendNibble((b >> 0) & 0x0F))
+      return false;
+    return true;
+  }
+
+  bool newLine()
+  {
+    print_.println();
+    return true;
+  }
+
+  bool sendData(const uint8_t* buf, size_t count)
+  {
+    for (size_t i = 0; i < count; i++) {
+      if (!sendByte(buf[i]))
+        return false;
+    }
+    newLine();
+    return true;
+  }
+};
+
+
+
+
+
+
 
 
 class I2CScan
@@ -108,8 +191,6 @@ public:
   static void getFactoryTrim()
   {
     MPU6050 dev(i2c.getBus(0));
-
-
 
     MPU6050SelfTestData st;
     if (!dev.getSelfTestData(&st)) {
@@ -337,7 +418,7 @@ public:
     if (!dev.getCalibration(&calib))
       return;
 
-    int cycles = 1024;
+    int cycles = 128;
     while (cycles-- > 0) {
       logger.printf("updateCalibration:");
       if (!dev.updateCalibration(&calib))
@@ -360,17 +441,170 @@ public:
 };
 
 
+class UAV
+{
+private:
+  Remote&             remote_;
+  Logger&             logger_;
+
+  MPU6050             mpu6050_;
+  HMC5883L            hmc5883l_;
+  HMC5883LCalibration hmc5883l_calib_;
+
+public:
+  UAV(Remote& remote, Logger& logger)
+      : remote_(remote), logger_(logger),
+        mpu6050_(i2c.getBus(0)), hmc5883l_(i2c.getBus(0))
+  {
+  }
+
+  bool getData(UAVSensorData* data)
+  {
+    MPU6050Measurement mpu6050meas;
+    if (!mpu6050_.getMeasurement(&mpu6050meas)) {
+      logger_.printf("mpu6050::getMeasurement() failed");
+      return false;
+    }
+
+    HMC5883LMeasurement hmc5883lmeas;
+    if (!hmc5883l_.getMeasurement(hmc5883l_calib_, &hmc5883lmeas)) {
+      logger_.printf("hmc5883l::getMeasurement() failed");
+      return false;
+    }
+
+    data->gyro.x  = mpu6050meas.gyro.x;
+    data->gyro.y  = mpu6050meas.gyro.y;
+    data->gyro.z  = mpu6050meas.gyro.z;
+    data->accel.x = mpu6050meas.accel.x;
+    data->accel.y = mpu6050meas.accel.y;
+    data->accel.z = mpu6050meas.accel.z;
+    data->mag.x   = hmc5883lmeas.mag.x;
+    data->mag.y   = hmc5883lmeas.mag.y;
+    data->mag.z   = hmc5883lmeas.mag.z;
+    return true;
+  }
+
+  void logData(const UAVSensorData& data)
+  {
+    logger_.printf("A=(%.5f, %.5f, %.5f)", data.accel.x, data.accel.y, data.accel.z);
+    logger_.printf("G=(%.5f, %.5f, %.5f)", data.gyro.x, data.gyro.y, data.gyro.z);
+    logger_.printf("M=(%.5f, %.5f, %.5f)", data.mag.x, data.mag.y, data.mag.z);
+  }
+
+
+  void setup()
+  {
+    if (!mpu6050_.init()) {
+      logger_.printf("mpu6050::init() failed");
+    }
+    if (!mpu6050_.enableReset()) {
+      logger_.printf("reset() failed");
+      return;
+    }
+    if (!mpu6050_.disableSleep()) {
+      logger_.printf("disableSleep() failed");
+      return;
+    }
+
+
+
+
+    if (!hmc5883l_.init()) {
+      logger_.printf("hmc5883l::init() failed");
+    }
+
+    HMC5883LParams params;
+    if (!hmc5883l_.getParams(&params)) {
+      return;
+    }
+    params.msmode = HMC5883L_MSMODE_NORMAL;
+    params.outprt = HMC5883L_OUTPRT_15_HZ;
+    params.smpavg = HMC5883L_SAMPLE_AVG_1;
+    params.range  = HMC5883L_RANGE_4_7;
+    params.opmode = HMC5883L_OPMODE_CONT;
+    if (!hmc5883l_.setParams(params)) {
+      return;
+    }
+
+    if (!hmc5883l_.getCalibration(&hmc5883l_calib_))
+      return;
+
+    int cycles = 1000;
+    while (cycles-- > 0) {
+      logger_.printf("updateCalibration:");
+      if (!hmc5883l_.updateCalibration(&hmc5883l_calib_)) {
+        return;
+      }
+      delay(5);
+    }
+  }
+
+  void loop()
+  {
+    UAVSensorData uav_data;
+    if (!getData(&uav_data)) {
+      logger_.printf("getData() failed");
+      return;
+    }
+
+#if 1
+    if (!remote_.sendUAVSensorData(uav_data)) {
+      logger_.printf("sendUAVSensorData() failed");
+      return;
+    }
+#else
+    logData(uav_data);
+#endif
+  }
+};
+
+
+
+class UAVTest
+{
+private:
+  PrintRemote remote_;
+  PrintLogger logger_;
+  UAV uav_;
+
+public:
+  UAVTest() : remote_(Serial), logger_(Serial), uav_(remote_, logger_)
+  {
+  }
+
+  void setup()
+  {
+    uav_.setup();
+  }
+
+  void loop()
+  {
+    uav_.loop();
+  }
+};
+
+
+
+
+UAVTest uav_test;
+
+PrintLogger print_logger(Serial);
+
 void setup(void)
 {
   Serial.begin(38400);
-  logger.setImpl(&print_logger);
+  setLogger(print_logger);
+
+  uav_test.setup();
 }
 
 void loop(void)
 {
+  uav_test.loop();
+
   //MPU6050Acquire::getData();
   //MPU6050Acquire::selfTest();
   //MPU6050Acquire::getFactoryTrim();
 
-  HMC5883LTest::getData();
+  //HMC5883LTest::getData();
 }

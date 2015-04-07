@@ -28,24 +28,15 @@ static xstream_ops_t logger_xstream_ops = {
 };
 
 
-Logger::Logger() : impl_(NULL)
+Logger::Logger()
 {
 }
-void Logger::setImpl(LoggerImpl* impl)
+size_t Logger::append(const uint8_t* buf, size_t nbytes)
 {
-  impl_ = impl;
-}
-void Logger::append(const uint8_t* buf, size_t nbytes)
-{
-  if (impl_ != NULL) {
-    impl_->append(buf, nbytes);
-  }
+  return nbytes;
 }
 void Logger::flush()
 {
-  if (impl_ != NULL) {
-    impl_->flush();
-  }
 }
 void Logger::msg(const char* msg)
 {
@@ -91,8 +82,10 @@ void PrintLogger::flush()
 }
 
 
+NullLogger nullLogger;
+Logger& logger = nullLogger;
 
-//
-// Global Log object
-//
-Logger logger;
+void setLogger(Logger& l)
+{
+  logger = l;
+}

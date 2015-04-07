@@ -4,30 +4,15 @@
 #include <Print.h>
 
 //
-// LoggerImpl
-//
-class LoggerImpl
-{
-public:
-  virtual size_t append(const uint8_t* buf, size_t nbytes);
-  virtual void flush();
-};
-
-
-//
 // Logger
 //
 class Logger
 {
-private:
-  LoggerImpl* impl_;
-
 public:
   Logger();
-  void setImpl(LoggerImpl* impl);
 
-  void append(const uint8_t* buf, size_t nbytes);
-  void flush();
+  virtual size_t append(const uint8_t* buf, size_t nbytes);
+  virtual void flush();
 
   void msg(const char* msg);
   void vprintf(const char* format, va_list ap);
@@ -38,16 +23,23 @@ public:
 //
 // PrintLogger
 //
-class PrintLogger : public LoggerImpl
+class PrintLogger : public Logger
 {
 private:
   Print& print_;
+
 public:
   PrintLogger(Print& print);
   size_t append(const uint8_t* buf, size_t nbytes);
   void flush();
 };
 
-extern Logger logger;
+class NullLogger : public Logger
+{
+};
+
+extern Logger& logger;
+
+void setLogger(Logger& logger);
 
 #endif // _LOGGER_HPP
